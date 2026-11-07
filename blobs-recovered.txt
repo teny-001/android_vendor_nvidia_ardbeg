@@ -1,0 +1,23 @@
+# =============================================================================
+# blobs-recovered.txt — 从原厂 4.4.4 system.img 补回来的闭源文件
+#
+# 【为什么需要这个文件】
+#   ardbeg-vendor-blobs.mk.orig-4.4.4 是「原厂 setup-makefiles.sh 生成的清单」
+#   的存档，它列了 345 条，其中 35 条指向包里根本没有的文件。
+#   手工提取 blob 时还有一批**原厂清单里有、但提取时漏了**的文件，
+#   以及一批**原厂清单里也没有、但原厂镜像里确实存在**的库
+#   （典型：libstlport.so，它是 NDK 带进来的，原厂 setup-makefiles 没列）。
+#
+#   这些文件必须补进来，否则保留的 blob 会 DT_NEEDED 解析失败，
+#   开机 dlopen 报 "library ... not found"。
+#
+# 【格式】每行  源路径:安装目标路径
+#   由 tools/gen_vendor_mk.py 合并进 ardbeg-vendor-blobs.mk。
+#   本文件由 tools/fix_vendor.py 维护，也可以手工追加。
+# =============================================================================
+
+# 来自原厂 lib/libstlport.so
+vendor/nvidia/ardbeg/proprietary/lib/libstlport.so:system/lib/libstlport.so
+
+# 来自原厂 lib/libasan_preload.so
+vendor/nvidia/ardbeg/proprietary/lib/libasan_preload.so:system/lib/libasan_preload.so

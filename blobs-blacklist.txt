@@ -1,0 +1,102 @@
+# =============================================================================
+# blobs-blacklist.txt — 7.1 上必须排除的 4.4 闭源文件
+#
+# 格式：<安装目标路径>  <原因>       （# 开头为注释，空行忽略）
+#
+# 为什么需要这个文件：
+#   ardbeg-vendor-blobs.mk 是从原厂 4.4.4 线刷包里手工提取生成的，
+#   里面有大量 4.4 时代的 HAL 实现。直接搬到 7.1 会有三种后果：
+#     a) 和 AOSP 自己编的同名文件撞车 -> 编译期 "Two files installed to the same path"
+#     b) 覆盖了 7.1 的同名系统库     -> 编译能过，开机黑屏/无限重启
+#     c) 依赖 4.4 才有的库（libstlport / libbcinfo / libpixelflinger ...）
+#        -> 编译能过，运行期 dlopen 失败，对应功能静默不可用
+#   这份清单只做一件事：把上面三类文件排除掉，其余原样保留。
+#   每个条目都必须写清楚"为什么排除"，以及"7.1 上用什么替代"。
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 一、图形：EGL/GLES 的实现不能覆盖 AOSP 的
+# -----------------------------------------------------------------------------
+# 原厂把完整的 EGL 实现放在 /system/lib/libEGL.so（332 KB，不是加载器），
+# 并且依赖 libGLES_trace.so（本包内没有）。7.1 的 libEGL.so 是 AOSP 自己编的，
+# 带 EGL 1.5、ANDROID_image_native_buffer 等新接口，被 4.4 版本覆盖后
+# SurfaceFlinger 起不来（开机黑屏、logcat 里 eglInitialize 失败）。
+#
+# 正确做法（和 LineageOS 官方 shieldtablet 14.1 一致）：
+#   保留 AOSP 的 /system/lib/libEGL.so
+#   + /system/lib/egl/egl.cfg 指定 "0 1 tegra"
+#   + /system/lib/egl/libEGL_tegra.so（9 KB 加载器，dlopen vendor 实现）
+#   + /system/vendor/lib/libEGL_tegra_impl.so（真正的实现）
+system/lib/libEGL.so            4.4 完整 EGL 实现，会覆盖 7.1 的 AOSP libEGL.so；改用 egl.cfg + libEGL_tegra.so 加载器
+system/lib/libGLESv2.so         同上，覆盖 7.1 的 libGLESv2.so 会导致 HWUI 初始化失败
+system/lib/libGLESv1_CM.so      同上，覆盖 7.1 的 libGLESv1_CM.so
+system/lib/egl/libGLES_android.so  依赖 libpixelflinger.so（7.1 已删除该库），加载必失败；7.1 的软件 GL 走 libGLES_swiftshader/libGLES_android 由源码提供
+
+# -----------------------------------------------------------------------------
+# 二、HAL：与设备树源码编译的同名模块冲突
+# -----------------------------------------------------------------------------
+# 这些 HAL 我们在设备树里用源码编译（7.1 接口），如果同时拷入 4.4 的 blob，
+# build 会报 "Two files installed to the same path"。
+system/lib/hw/lights.tegra.so       设备树 liblights/ 源码编译（lights.tegra），7.1 lights HAL 接口未变
+vendor/lib/hw/power.tegra.so        改用 hardware/nvidia/power（7.1 版，TARGET_POWERHAL_VARIANT=tegra）
+vendor/lib/libstagefrighthw.so      【2026-11-07 更正历史误判】此前写「7.1 要求 createOMXPlugin(bool secure)，所以排除 4.4 blob」是错的：本树 OMXMaster::addVendorPlugin() 用的是无参 CreateOMXPluginFunc，并 fallback 到 _ZN7android15createOMXPluginEv，这份 4.4 blob 正好导出该符号，官方 cm-14.1 的 hardware/nvidia/libstagefrighthw/omxplugin.cpp 也是无参。该误判导致 ROM 里完全没有 libstagefrighthw.so，OMX.Nvidia.* 全部不可用。现改由设备树 prebuilt/lib/libstagefrighthw.so 承接并装到 system/lib（见 device.mk 第十一节），vendor 侧仍不重复安装到 vendor/lib。
+vendor/lib/libbt-vendor.so          改用 hardware/broadcom/libbt 源码编译（7.1 BlueDroid 接口）
+
+# -----------------------------------------------------------------------------
+# 三、HAL：4.4 接口，7.1 不兼容，且本机硬件本来就没有
+# -----------------------------------------------------------------------------
+system/lib/hw/camera.tegra.so       4.4 camera HAL1，依赖 libcamera_metadata/libcameraservice/libjpeg（7.1 里前两个已改名/移除）；本机无 camera sensor，用 USE_CAMERA_STUB
+system/lib/hw/audio.primary.tegra.so  4.4 音频 HAL，依赖 libnvaudioservice/libaudioavp；已改用设备树 tinyhal（audio.primary.ardbeg.so）
+system/lib/hw/audio_policy.tegra.so  4.4 的 policy HAL；7.1 的 AudioPolicyManager 在 libaudiopolicyservice 里，不再加载 policy HAL
+system/lib/hw/gps.mtk.so            4.4 GPS HAL；本机无 GPS 硬件，且 7.1 改用 GNSS HAL 1.0
+system/lib/hw/nfc.tegra.so          本机无 NFC 硬件
+system/lib/hw/ts.default.so         4.4 触摸 HAL，7.1 已移除该 HAL 接口；本机无内置触摸屏
+system/lib/hw/sensors.tegra.so      4.4 传感器 shim，dlopen 的后端（libsensors.mpl.so 等）在本包里全部缺失；7.1 需要重编 sensors HAL
+system/lib/libsensors.mpl.so        4.4 InvenSense MPL 后端，文件缺失（见 fatal 列表），且 ABI 与 7.1 不符
+system/lib/libsensors.nvs_input.so  同上
+system/lib/libsensors_external.so   同上
+system/lib/libsensors.isl29018.so   同上（光感，4.4 专用）
+system/lib/libsensors.isl29028.so   同上（光感，4.4 专用）
+
+# -----------------------------------------------------------------------------
+# 四、运行库：依赖 7.1 里不存在的库
+# -----------------------------------------------------------------------------
+vendor/lib/libnvRSDriver.so       RenderScript 驱动，依赖 libLLVM/libbcinfo/libRSCpuRef/libRS_internal（7.1 的 RS 架构已换，这些库不存在）。改用 AOSP 默认 RS 驱动
+vendor/lib/libnvopt_dvm.so        Dalvik 优化库（dexopt），7.1 用 ART，完全无用
+system/lib/libbt-hci.so           4.4 BlueDroid 内部库，依赖 libbt-utils.so（缺失）；7.1 的蓝牙栈在 system/bt 里自带
+system/lib/libwebrtc_audio_preprocessing.so  依赖 libstlport.so（7.1 无）；音频预处理改用 7.1 的 libwebrtc_audio_preprocessing（external/webrtc 提供）
+system/lib/libstagefright_soft_ffmpegadec.so 依赖 libffmpeg_utils.so/libstagefright_omx.so（均缺失）；7.1 用软解 google 配置
+system/lib/libstagefright_soft_ffmpegvdec.so 同上
+
+# -----------------------------------------------------------------------------
+# 五、7.1 已不需要的 NVIDIA 私有服务
+# -----------------------------------------------------------------------------
+vendor/bin/ussrd                  4.4 的 USSD 服务（NVIDIA 私有），7.1 无对应 init 服务，装了也不会启动
+# [已解禁] vendor/lib/libussrd.so
+#   该库被其他**保留的** blob 以 DT_NEEDED 依赖，删掉会导致 dlopen 失败；被排除的只是使用它的守护进程/服务本体，不是库本身
+
+# -----------------------------------------------------------------------------
+# 六、与 AOSP 7.1 源码模块同名的库（会造成重复安装）
+# -----------------------------------------------------------------------------
+system/lib/libeffects.so            4.4 音频音效库；7.1 由 frameworks/av/media/libeffects 源码编译（libeffects.so），同名会冲突
+system/lib/libwebrtc_audio_coding.so 4.4 webrtc 音频编码库；7.1 由 external/webrtc 源码编译，同名会冲突
+
+# -----------------------------------------------------------------------------
+# 七、7.1 已移除的框架组件
+# -----------------------------------------------------------------------------
+system/lib/libvideoeditor_core.so      Android 7 已移除 VideoEditor 框架，这些库无人加载，且依赖缺失的 libvideoeditor_osal
+system/lib/libvideoeditor_jni.so       同上
+system/lib/libvideoeditorplayer.so     同上
+system/lib/libvideoeditor_videofilters.so 同上
+# [已解禁] system/lib/libpowerservice_client.so
+#   该库被其他**保留的** blob 以 DT_NEEDED 依赖，删掉会导致 dlopen 失败；被排除的只是使用它的守护进程/服务本体，不是库本身
+system/lib/libntfs-3g.so            7.1 由 external/ntfs-3g 源码编译（LOCAL_MODULE := libntfs-3g），同名会冲突（实测 "overriding commands for target ... libntfs-3g.so"）
+
+# -----------------------------------------------------------------------------
+# 八、与 AOSP 7.1 源码/资源重复（实测 overriding commands 警告）
+# -----------------------------------------------------------------------------
+system/bin/asanwrapper             7.1 由 system/core/asanwrapper 源码编译
+system/bin/audioloop               7.1 由 external/audioloop 源码编译
+system/bin/stagefright             7.1 由 frameworks/av/cmds/stagefright 源码编译
+system/lib/libexfat.so             7.1 由 external/exfat 源码编译
+system/usr/keylayout/*             7.1 在 frameworks/base/data/keyboards 里自带全部 Vendor_*.kl，vendor 版本会覆盖并造成重复安装
